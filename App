@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <title>Payables Value Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        * { -webkit-tap-highlight-color: transparent; }
+        body { font-family: 'Inter', sans-serif; overscroll-behavior: none; background: #0f172a; color: white; }
+        .slide-enter { animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+        input[type="range"] { -webkit-appearance: none; background: transparent; width: 100%; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; height: 24px; width: 24px; border-radius: 50%; background: #3b82f6; cursor: pointer; margin-top: -10px; }
+        input[type="range"]::-webkit-slider-runnable-track { width: 100%; height: 4px; background: #334155; border-radius: 2px; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useMemo } = React;
+        const DEFAULTS = { cardTime: 2, hourlyCost: 45, rebateRate: 0.018, dpoExtension: 35, fraudCost: 6, productivityMultiplier: 3 };
+        const formatCurrency = (v) => v >= 1000000 ? `$${(v/1000000).toFixed(1)}M` : v >= 1000 ? `$${(v/1000).toFixed(0)}K` : `$${v.toFixed(0)}`;
+        const calc = (inputs, settings) => {
+            const { annualPayments, avgPaymentAmount, manualTime, cardablePercent, costOfCapital } = inputs;
+            const { cardTime, hourlyCost, rebateRate, dpoExtension, fraudCost, productivityMultiplier } = settings;
+            const annualSpend = annualPayments * avgPaymentAmount;
+            const cardSpend = annualSpend * (cardablePercent / 100);
+            const hoursSaved = (annualPayments * (manualTime - cardTime)) / 60;
+            const laborSavings = hoursSaved * hourlyCost;
+            const financeProductivityValue = laborSavings * productivityMultiplier;
+            const capitalFreed = cardSpend * (dpoExtension / 365);
+            const workingCapitalValue = capitalFreed * (costOfCapital / 100);
+            const rebateValue = cardSpend * rebateRate;
+            const fraudReductionValue = (annualPayments * (cardablePercent / 100)) * fraudCost;
+            return { annualSpend, cardSpend, hoursSaved: Math.round(hoursSaved), laborSavings, financeProductivityValue, capitalFreed, workingCapitalValue, rebateValue, fraudReductionValue, totalValue: laborSavings + financeProductivityValue + workingCapitalValue + rebateValue + fraudReductionValue };
+        };
+        const App = () => {
+            const [screen, setScreen] = useState(0);
+            const [inputs, setInputs] = useState({ annualPayments: '', avgPaymentAmount: '', manualTime: 15, cardablePercent: 60, costOfCapital: 12 });
+            const [settings, setSettings] = useState(DEFAULTS);
+            const [supplierFee, setSupplierFee] = useState(2.5);
+            const results = useMemo(() => calc(inputs, settings), [inputs, settings]);
+            const next = () => setScreen(s => Math.min(s + 1, 5));
+            const back = () => setScreen(s => Math.max(s - 1, 0));
+            const canProceed = () => [inputs.annualPayments > 0, inputs.avgPaymentAmount > 0, inputs.manualTime > 0, inputs.cardablePercent >= 0, inputs.costOfCapital > 0][screen];
+            const exportPDF = () => { const { jsPDF } = window.jspdf; const d = new jsPDF(); d.text('Payables Analysis', 20, 30); d.text(`Value: ${formatCurrency(results.totalValue)}`, 20, 50); d.save('analysis.pdf'); };
+            const screens = [
+                <div className="slide-enter"><h2 className="text-3xl font-bold mb-2">Payment Volume</h2><p className="text-slate-400 mb-8">How many invoices per year?</p><input type="number" value={inputs.annualPayments} onChange={e => setInputs(i => ({...i, annualPayments: +e.target.value}))} placeholder="Enter amount" className="w-full bg-slate-800 border-2 border-slate-700 rounded-2xl py-4 px-4 text-2xl font-semibold text-center text-white" /><div className="flex flex-wrap gap-2 mt-4">{[1000,5000,10000,50000].map(n => <button key={n} onClick={() => setInputs(i => ({...i, annualPayments: n}))} className={`px-4 py-2 rounded-full text-sm font-medium ${inputs.annualPayments === n ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}>{n/1000}K</button>)}</div></div>,
+                <div className="slide-enter"><h2 className="text-3xl font-bold mb-2">Payment Size</h2><p className="text-slate-400 mb-8">Typical payment amount?</p><div className="relative"><span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-lg">$</span><input type="number" value={inputs.avgPaymentAmount} onChange={e => setInputs(i => ({...i, avgPaymentAmount: +e.target.value}))} placeholder="Enter amount" className="w-full bg-slate-800 border-2 border-slate-700 rounded-2xl py-4 px-4 text-2xl font-semibold text-center text-white pl-10" /></div><div className="flex flex-wrap gap-2 mt-4">{[1000,5000,10000,25000].map(n => <button key={n} onClick={() => setInputs(i => ({...i, avgPaymentAmount: n}))} className={`px-4 py-2 rounded-full text-sm font-medium ${inputs.avgPaymentAmount === n ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}>${n/1000}K</button>)}</div>{inputs.annualPayments * inputs.avgPaymentAmount > 0 && <div className="mt-6 p-4 bg-blue-500/10 rounded-2xl"><p className="text-sm text-blue-400">Annual Spend</p><p className="text-2xl font-bold text-blue-300">{formatCurrency(inputs.annualPayments * inputs.avgPaymentAmount)}</p></div>}</div>,
+                <div className="slide-enter"><h2 className="text-3xl font-bold mb-2">Process Time</h2><p className="text-slate-400 mb-8">Minutes per payment today?</p><div className="text-center mb-6"><span className="text-5xl font-bold text-blue-400">{inputs.manualTime}</span><span className="text-xl text-slate-400 ml-2">min</span></div><input type="range" min="1" max="30" value={inputs.manualTime} onChange={e => setInputs(i => ({...i, manualTime: +e.target.value}))} className="w-full mb-6" /><div className="p-4 bg-emerald-500/10 rounded-2xl"><p className="text-emerald-400">Card time: 2 min (default)</p></div></div>,
+                <div className="slide-enter"><h2 className="text-3xl font-bold mb-2">Card Acceptance</h2><p className="text-slate-400 mb-8">% of suppliers taking cards?</p><div className="text-center mb-6"><span className="text-5xl font-bold text-purple-400">{inputs.cardablePercent}</span><span className="text-xl text-slate-400 ml-2">%</span></div><input type="range" min="0" max="80" value={inputs.cardablePercent} onChange={e => setInputs(i => ({...i, cardablePercent: +e.target.value}))} className="w-full mb-6" /><div className="p-4 bg-purple-500/10 rounded-2xl"><p className="text-purple-400">Card spend: {formatCurrency(results.cardSpend)}</p></div></div>,
+                <div className="slide-enter"><h2 className="text-3xl font-bold mb-2">Cost of Capital</h2><p className="text-slate-400 mb-8">Target return on capital?</p><div className="text-center mb-6"><span className="text-5xl font-bold text-amber-400">{inputs.costOfCapital}</span><span className="text-xl text-slate-400 ml-2">%</span></div><input type="range" min="8" max="20" step="0.5" value={inputs.costOfCapital} onChange={e => setInputs(i => ({...i, costOfCapital: +e.target.value}))} className="w-full" /><p className="text-center text-slate-500 mt-4">Typical: 10-12%</p></div>,
+                <div className="slide-enter space-y-4 pb-24"><div className="text-center mb-6"><p className="text-sm text-slate-400 uppercase">Total Annual Value</p><h1 className="text-4xl font-bold text-emerald-400">{formatCurrency(results.totalValue)}</h1></div><div className="grid grid-cols-2 gap-2">{Object.entries({labor: results.laborSavings, productivity: results.financeProductivityValue, capital: results.workingCapitalValue, rebates: results.rebateValue, fraud: results.fraudReductionValue}).map(([k,v]) => <div key={k} className="p-3 bg-slate-800 rounded-xl"><p className="text-xs text-slate-400 capitalize">{k}</p><p className="text-lg font-bold text-white">{formatCurrency(v)}</p></div>)}</div><div className="bg-slate-800 rounded-xl p-4"><h3 className="text-sm font-semibold mb-3">Card Adoption: {inputs.cardablePercent}%</h3><input type="range" min="0" max="80" value={inputs.cardablePercent} onChange={e => setInputs(i => ({...i, cardablePercent: +e.target.value}))} className="w-full" /></div><div className="bg-slate-800 rounded-xl p-4"><h3 className="text-sm font-semibold mb-2">Supplier Fee: {supplierFee}%</h3><input type="number" value={supplierFee} onChange={e => setSupplierFee(+e.target.value)} className="w-full bg-slate-900 rounded-lg py-2 px-3 text-white mb-2" /><p className="text-sm">Net value: <span className="text-emerald-400 font-bold">{formatCurrency(results.totalValue - (results.cardSpend * supplierFee/100))}</span></p></div><div className="flex gap-2"><button onClick={exportPDF} className="flex-1 bg-blue-600 text-white font-semibold py-3 rounded-xl">Export PDF</button><button onClick={() => window.location.href = `mailto:?subject=Analysis&body=${formatCurrency(results.totalValue)}`} className="flex-1 bg-slate-700 text-white font-semibold py-3 rounded-xl">Share</button></div><button onClick={() => setScreen(0)} className="w-full text-slate-500 py-3">Start Over</button></div>
+            ];
+            return <div className="min-h-screen bg-slate-900 text-white"><div className="max-w-md mx-auto px-4 py-6">{screen < 5 && <div className="flex justify-center gap-2 mb-6">{[0,1,2,3,4].map(i => <div key={i} className={`h-2 rounded-full ${i === screen ? 'w-8 bg-blue-500' : i < screen ? 'w-2 bg-blue-400' : 'w-2 bg-slate-700'}`} />)}</div>}<div className="mb-24">{screens[screen]}</div></div>{screen < 5 && <div className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-4"><div className="max-w-md mx-auto flex gap-3">{screen > 0 && <button onClick={back} className="px-6 py-4 rounded-2xl bg-slate-800 text-white font-semibold">←</button>}<button onClick={next} disabled={!canProceed()} className={`flex-1 py-4 rounded-2xl font-semibold ${canProceed() ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-500'}`}>{screen === 4 ? 'Calculate →' : 'Continue →'}</button></div></div>}</div>;
+        };
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
