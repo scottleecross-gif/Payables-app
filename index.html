@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Payables Value Analyzer</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="/icon-192x192.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            overscroll-behavior: none;
+        }
+        
+        .slide-enter {
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        
+        .number-flow {
+            font-variant-numeric: tabular-nums;
+            transition: all 0.3s ease;
+        }
+        
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        input[type="range"] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            margin-top: -10px;
+        }
+        
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #334155;
+            border-radius: 2px;
+        }
+        
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen">
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
+        
+        // ==================== CONSTANTS ====================
+        const DEFAULTS = {
+            cardTime: 2,
+            hourlyCost: 45,
+            rebateRate: 0.018,
+            dpoExtension: 35,
+            fraudCost: 6,
+            productivityMultiplier: 3,
+            costOfCapital: 0.12
+        };
+        
+        const SCREENS = [
+            { id: 'volume', title: 'Payment Volume' },
+            { id: 'size', title: 'Payment Size' },
+            { id: 'efficiency', title: 'Process Efficiency' },
+            { id: 'acceptance', title: 'Card Acceptance' },
+            { id: 'capital', title: 'Cost of Capital' },
+            { id: 'results', title: 'Analysis' }
+        ];
+        
+        // ==================== UTILITY FUNCTIONS ====================
+        const formatCurrency = (value) => {
+            if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
+            if (value >= 1000) return `$${(value / 1000).toFixed(0)}K`;
+            return `$${value.toFixed(0)}`;
+        };
+        
+        const formatNumber = (value) => {
+            if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+            if (value >= 1000) return `${(value / 1000).toFixed(0)}K`;
+            return value.toFixed(0);
+        };
+        
+        // ==================== CALCULATION ENGINE ====================
+        const calculateValue = (inputs, settings) => {
+            const {
+                annualPayments,
+                avgPaymentAmount,
+                manualTime,
+                cardablePercent,
+                costOfCapital
+            } = inputs;
+            
+            const {
+                cardTime,
+                hourlyCost,
+                rebateRate,
+                dpoExtension,
+                fraudCost,
+                productivityMultiplier
+            } = settings;
+            
+            // Core calculations
+            const annualSpend = annualPayments * avgPaymentAmount;
+            const cardSpend = annualSpend * (cardablePercent / 100);
+            
+            // Time savings
+            const minutesSaved = manualTime - cardTime;
+            const annualMinutesSaved = annualPayments * minutesSaved;
+            const hoursSaved = annualMinutesSaved / 60;
+            
+            // Value components
+            const laborSavings = hoursSaved * hourlyCost;
+            const financeProductivityValue = laborSavings * productivityMultiplier;
+            
+            // Working capital
+            const capitalFreed = cardSpend * (dpoExtension / 365);
+            const workingCapitalValue = capitalFreed * costOfCapital;
+            
+            // Rebate
+            const rebateValue = cardSpend * rebateRate;
+            
+            // Fraud reduction
+            const checksEliminated = annualPayments * (cardablePercent / 100);
+            const fraudReductionValue = checksEliminated * fraudCost;
+            
+            // Total
+            const totalValue = laborSavings + financeProductivityValue + 
+                             workingCapitalValue + rebateValue + fraudReductionValue;
+            
+            return {
+                annualSpend,
+                cardSpend,
+                minutesSaved,
+                hoursSaved,
+                laborSavings,
+                financeProductivityValue,
+                capitalFreed,
+                workingCapitalValue,
+                rebateValue,
+                fraudReductionValue,
+                totalValue,
+                checksEliminated
+            };
+        };
+        
+        // ==================== COMPONENTS ====================
+        
+        // Progress Indicator
+        const ProgressDots = ({ current, total }) => (
+            <div className="flex justify-center gap-2 mb-6">
+                {Array.from({ length: total }).map((_, i) => (
+                    <div
+                        key={i}
+                        className={`h-2 rounded-full transition-all duration-300 ${
+                            i === current ? 'w-8 bg-blue-500' : 
+                            i < current ? 'w-2 bg-blue-400' : 'w-2 bg-slate-700'
+                        }`}
+                    />
+                ))}
+            </div>
+        );
+        
+        // Quick Select Chips
+        const QuickSelect = ({ options, value, onSelect, prefix = '' }) => (
+            <div className="flex flex-wrap gap-2 mt-4">
+                {options.map((opt) => (
+                    <button
+                        key={opt}
+                        onClick={() => onSelect(opt)}
+                        className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                            value === opt 
+                                ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/25' 
+                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        }`}
+                    >
+                        {prefix}{opt >= 1000 ? `${opt/1000}K` : opt}
+                    </button>
+                ))}
+            </div>
+        );
+        
+        // Number Input with Animation
+        const AnimatedInput = ({ value, onChange, placeholder, prefix = '', suffix = '' }) => (
+            <div className="relative mt-6">
+                {prefix && (
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
+                        {prefix}
+                    </span>
+                )}
+                <input
+                    type="number"
+                    value={value || ''}
+                    onChange={(e) => onChange(Number(e.target.value))}
+                    placeholder={placeholder}
+                    className="w-full bg-slate-800 border-2 border-slate-700 rounded-2xl py-4 px-4 text-2xl font-semibold text-center text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none transition-all"
+                    inputMode="numeric"
+                />
+                {suffix && (
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
+                        {suffix}
+                    </span>
+                )}
+            </div>
+        );
+        
+        // Settings Modal
+        const SettingsModal = ({ settings, onSave, onClose }) => {
+            const [localSettings, setLocalSettings] = useState(settings);
+            
+            const updateSetting = (key, value) => {
+                setLocalSettings(prev => ({ ...prev, [key]: Number(value) }));
+            };
+            
+            return (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
+                    <div className="bg-slate-900 w-full max-w-md rounded-3xl border border-slate-700 max-h-[90vh] overflow-y-auto">
+                        <div className="p-6 border-b border-slate-800 flex justify-between items-center">
+                            <h3 className="text-lg font-semibold">Advanced Settings</h3>
+                            <button onClick={onClose} className="text-slate-400 hover:text-white">✕</button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            {[
+                                { key: 'hourlyCost', label: 'AP Employee Cost/hr', default: 45, prefix: '$' },
+                                { key: 'rebateRate', label: 'Card Rebate Rate', default: 1.8, suffix: '%', scale: 100 },
+                                { key: 'dpoExtension', label: 'DPO Extension', default: 35, suffix: 'days' },
+                                { key: 'fraudCost', label: 'Fraud Cost per Check', default: 6, prefix: '$' },
+                                { key: 'productivityMultiplier', label: 'Productivity Multiplier', default: 3, suffix: 'x' },
+                                { key: 'cardTime', label: 'Card Processing Time', default: 2, suffix: 'min' }
+                            ].map(({ key, label, default: def, prefix, suffix, scale = 1 }) => (
+                                <div key={key}>
+                                    <label className="text-sm text-slate-400 block mb-2">{label}</label>
+                                    <div className="flex items-center gap-3">
+                                        <input
+                                            type="number"
+                                            value={(localSettings[key] * scale).toFixed(suffix === '%' ? 1 : 0)}
+                                            onChange={(e) => updateSetting(key, Number(e.target.value) / scale)}
+                                            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl py-3 px-4 text-white"
+                                        />
+                                        <span className="text-slate-400 text-sm w-16">Default: {def}{suffix}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="p-6 border-t border-slate-800">
+                            <button
+                                onClick={() => { onSave(localSettings); onClose(); }}
+                                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-4 rounded-2xl transition-colors"
+                            >
+                                Save Settings
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        // Main App Component
+        const App = () => {
+            const [currentScreen, setCurrentScreen] = useState(0);
+            const [showSettings, setShowSettings] = useState(false);
+            const [animating, setAnimating] = useState(false);
+            
+            // User inputs
+            const [inputs, setInputs] = useState({
+                annualPayments: '',
+                avgPaymentAmount: '',
+                manualTime: 15,
+                cardablePercent: 60,
+                costOfCapital: 12
+            });
+            
+            // Advanced settings
+            const [settings, setSettings] = useState(DEFAULTS);
+            
+            // Supplier fee for results screen
+            const [supplierFee, setSupplierFee] = useState(2.5);
+            
+            const results = useMemo(() => calculateValue(inputs, settings), [inputs, settings]);
+            
+            const nextScreen = () => {
+                if (currentScreen < SCREENS.length - 1) {
+                    setAnimating(true);
+                    setTimeout(() => {
+                        setCurrentScreen(c => c + 1);
+                        setAnimating(false);
+                    }, 300);
+                }
+            };
+            
+            const prevScreen = () => {
+                if (currentScreen > 0) {
+                    setAnimating(true);
+                    setTimeout(() => {
+                        setCurrentScreen(c => c - 1);
+                        setAnimating(false);
+                    }, 300);
+                }
+            };
+            
+            const canProceed = () => {
+                switch(currentScreen) {
+                    case 0: return inputs.annualPayments > 0;
+                    case 1: return inputs.avgPaymentAmount > 0;
+                    case 2: return inputs.manualTime > 0;
+                    case 3: return inputs.cardablePercent >= 0;
+                    case 4: return inputs.costOfCapital > 0;
+                    default: return true;
+                }
+            };
+            
+            // Export to PDF
+            const exportPDF = () => {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF();
+                
+                doc.setFontSize(20);
+                doc.text('Payables Transformation Analysis', 20, 30);
+                
+                doc.setFontSize(12);
+                doc.text(`Generated: ${new Date().toLocaleDateString()}`, 20, 45);
+                
+                doc.setFontSize(14);
+                doc.text('Executive Summary', 20, 65);
+                
+                doc.setFontSize(12);
+                doc.text(`Annual AP Spend: ${formatCurrency(results.annualSpend)}`, 20, 80);
+                doc.text(`Spend Moved to Card: ${formatCurrency(results.cardSpend)}`, 20, 90);
+                doc.text(`Working Capital Unlocked: ${formatCurrency(results.capitalFreed)}`, 20, 100);
+                doc.text(`Total Annual Value Created: ${formatCurrency(results.totalValue)}`, 20, 110);
+                
+                doc.save('payables-analysis.pdf');
+            };
+            
+            // Screen Renderers
+            const renderScreen = () => {
+                const screen = SCREENS[currentScreen];
+                
+                switch(screen.id) {
+                    case 'volume':
+                        return (
+                            <div className="slide-enter">
+                                <h2 className="text-3xl font-bold mb-2">Payment Volume</h2>
+                                <p className="text-slate-400 mb-8">About how many invoices does AP process each year?</p>
+                                
+                                <AnimatedInput
+                                    value={inputs.annualPayments}
+                                    onChange={(v) => setInputs(i => ({ ...i, annualPayments: v }))}
+                                    placeholder="Enter number of payments"
+                                />
+                                
+                                <QuickSelect
+                                    options={[1000, 5000, 10000, 50000, 100000]}
+                                    value={inputs.annualPayments}
+                                    onSelect={(v) => setInputs(i => ({ ...i, annualPayments: v }))}
+                                />
+                            </div>
+                        );
+                        
+                    case 'size':
+                        const spend = inputs.annualPayments * inputs.avgPaymentAmount;
+                        return (
+                            <div className="slide-enter">
+                                <h2 className="text-3xl font-bold mb-2">Payment Size</h2>
+                                <p className="text-slate-400 mb-8">What is the typical payment amount?</p>
+                                
+                                <AnimatedInput
+                                    value={inputs.avgPaymentAmount}
+                                    onChange={(v) => setInputs(i => ({ ...i, avgPaymentAmount: v }))}
+                                    placeholder="Enter average amount"
+                                    prefix="$"
+                                />
+                                
+                                <QuickSelect
+                                    options={[1000, 5000, 10000, 25000, 50000]}
+                                    value={inputs.avgPaymentAmount}
+                                    onSelect={(v) => setInputs(i => ({ ...i, avgPaymentAmount: v }))}
+                                    prefix="$"
+                                />
+                                
+                                {spend > 0 && (
+                                    <div className="mt-8 p-4 bg-blue-500/10 border border-blue-500/20 rounded-2xl">
+                                        <p className="text-sm text-blue-400 mb-1">Annual AP Spend</p>
+                                        <p className="text-2xl font-bold text-blue-300 number-flow">
+                                            {formatCurrency(spend)}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                        
+                    case 'efficiency':
+                        return (
+                            <div className="slide-enter">
+                                <h2 className="text-3xl font-bold mb-2">Process Efficiency</h2>
+                                <p className="text-slate-400 mb-8">About how long does it take to process one payment today?</p>
+                                
+                                <div className="text-center mb-8">
+                                    <span className="text-5xl font-bold text-blue-400 number-flow">
+                                        {inputs.manualTime}
+                                    </span>
+                                    <span className="text-xl text-slate-400 ml-2">minutes</span>
+                                </div>
+                                
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="30"
+                                    value={inputs.manualTime}
+                                    onChange={(e) => setInputs(i => ({ ...i, manualTime: Number(e.target.value) }))}
+                                    className="w-full mb-6"
+                                />
+                                
+                                <div className="flex justify-between text-xs text-slate-500 mb-8">
+                                    <span>1 min</span>
+                                    <span>15 min</span>
+                                    <span>30 min</span>
+                                </div>
+                                
+                                <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400">
+                                        ⚡
+                                    </div>
+                                    <div>
+                                        <p className="text-sm text-emerald-400">Card processing time</p>
+                                        <p className="text-lg font-semibold text-emerald-300">2 minutes (default)</p>
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                        
+                    case 'acceptance':
+                        return (
+                            <div className="slide-enter">
+                                <h2 className="text-3xl font-bold mb-2">Card Acceptance</h2>
+                                <p className="text-slate-400 mb-8">What percentage of suppliers could realistically accept card?</p>
+                                
+                                <div className="text-center mb-8">
+                                    <span className="text-5xl font-bold text-purple-400 number-flow">
+                                        {inputs.cardablePercent}
+                                    </span>
+                                    <span className="text-xl text-slate-400 ml-2">%</span>
+                                </div>
+                                
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="80"
+                                    value={inputs.cardablePercent}
+                                    onChange={(e) => setInputs(i => ({ ...i, cardablePercent: Number(e.target.value) }))}
+                                    className="w-full mb-6"
+                                />
+                                
+                                <div className="flex justify-between text-xs text-slate-500 mb-8">
+                                    <span>0%</span>
+                                    <span>40%</span>
+                                    <span>80%</span>
+                                </div>
+                                
+                                <div className="p-4 bg-purple-500/10 border border-purple-500/20 rounded-2xl">
+                                    <p className="text-sm text-purple-400 mb-1">Potential Card Spend</p>
+                                    <p className="text-2xl font-bold text-purple-300 number-flow">
+                                        {formatCurrency(results.cardSpend)}
+                                    </p>
+                                </div>
+                            </div>
+                        );
+                        
+                    case 'capital':
+                        return (
+                            <div className="slide-enter">
+                                <h2 className="text-3xl font-bold mb-2">Cost of Capital</h2>
+                                <p className="text-slate-400 mb-8">What return does your company typically target on capital?</p>
+                                
+                                <div className="text-center mb-8">
+                                    <span className="text-5xl font-bold text-amber-400 number-flow">
+                                        {inputs.costOfCapital}
+                                    </span>
+                                    <span className="text-xl text-slate-400 ml-2">%</span>
+                                </div>
+                                
+                                <input
+                                    type="range"
+                                    min="8"
+                                    max="20"
+                                    step="0.5"
+                                    value={inputs.costOfCapital}
+                                    onChange={(e) => setInputs(i => ({ ...i, costOfCapital: Number(e.target.value) }))}
+                                    className="w-full mb-6"
+                                />
+                                
+                                <div className="flex justify-between text-xs text-slate-500 mb-8">
+                                    <span>8%</span>
+                                    <span>14%</span>
+                                    <span>20%</span>
+                                </div>
+                                
+                                <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl">
+                                    <p className="text-sm text-amber-400">Typical range: 10-12%</p>
+                                </div>
+                            </div>
+                        );
+                        
+                    case 'results':
+                        return (
+                            <div className="slide-enter space-y-6 pb-24">
+                                <div className="text-center mb-6">
+                                    <p className="text-sm text-slate-400 uppercase tracking-wider mb-2">Total Annual Value Created</p>
+                                    <h1 className="text-5xl font-bold text-emerald-400 number-flow">
+                                        {formatCurrency(results.totalValue)}
+                                    </h1>
+                                </div>
+                                
+                                {/* Value Breakdown Cards */}
+                                <div className="grid grid-cols-2 gap-3">
+                                    {[
+                                        { label: 'Labor Efficiency', value: results.laborSavings, color: 'blue' },
+                                        { label: 'Finance Productivity', value: results.financeProductivityValue, color: 'indigo' },
+                                        { label: 'Working Capital', value: results.workingCapitalValue, color: 'amber' },
+                                        { label: 'Card Rebates', value: results.rebateValue, color: 'purple' },
+                                        { label: 'Fraud Reduction', value: results.fraudReductionValue, color: 'rose' }
+                                    ].map(({ label, value, color }) => (
+                                        <div key={label} className={`p-4 bg-${color}-500/10 border border-${color}-500/20 rounded-2xl`}>
+                                            <p className={`text-xs text-${color}-400 mb-1`}>{label}</p>
+                                            <p className={`text-lg font-bold text-${color}-300 number-flow`}>
+                                                {formatCurrency(value)}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                                
+                                {/* Current vs Future */}
+                                <div className="glass-panel rounded-2xl p-4">
+                                    <h3 className="text-sm font-semibold text-slate-300 mb-4">State Comparison</h3>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <p className="text-xs text-slate-500 uppercase">Current State</p>
+                                            <div className="space-y-1 text-sm">
+                                                <p className="text-slate-400">• Manual processing</p>
+                                                <p className="text-slate-400">• Capital locked</p>
+                                                <p className="text-slate-400">• No rebates</p>
+                                                <p className="text-slate-400">• Clerical focus</p>
+                                            </div>
+                                            <div className="pt-2 border-t border-slate-700">
+                                                <p className="text-xs text-slate-500">Processing</p>
+                                                <p className="text-lg font-semibold text-slate-300">
+                                                    {Math.round(results.hoursSaved * 4)} hrs/yr
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <p className="text-xs text-emerald-500 uppercase">Optimized State</p>
+                                            <div className="space-y-1 text-sm">
+                                                <p className="text-emerald-400">• Automated cards</p>
+                                                <p className="text-emerald-400">• Extended DPO</p>
+                                                <p className="text-emerald-400">• Rebate capture</p>
+                                                <p className="text-emerald-400">• Strategic focus</p>
+                                            </div>
+                                            <div className="pt-2 border-t border-slate-700">
+                                                <p className="text-xs text-emerald-500">Hours Saved</p>
+                                                <p className="text-lg font-semibold text-emerald-400">
+                                                    {Math.round(results.hoursSaved)} hrs/yr
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {/* Interactive Slider */}
+                                <div className="glass-panel rounded-2xl p-4">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="text-sm font-semibold text-slate-300">Card Adoption %</h3>
+                                        <span className="text-2xl font-bold text-blue-400">{inputs.cardablePercent}%</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="80"
+                                        value={inputs.cardablePercent}
+                                        onChange={(e) => setInputs(i => ({ ...i, cardablePercent: Number(e.target.value) }))}
+                                        className="w-full mb-2"
+                                    />
+                                    <p className="text-xs text-slate-500 text-center">
+                                        Drag to adjust adoption rate and see value change
+                                    </p>
+                                </div>
+                                
+                                {/* Working Capital Timeline */}
+                                <div className="glass-panel rounded-2xl p-4">
+                                    <h3 className="text-sm font-semibold text-slate-300 mb-4">Working Capital Impact</h3>
+                                    <div className="space-y-4">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs">1</div>
+                                            <div className="flex-1">
+                                                <p className="text-sm text-slate-400">Invoice Received</p>
+                                            </div>
+                                        </div>
+                                        <div className="ml-4 border-l-2 border-slate-700 pl-4 space-y-4">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs">2</div>
+                                                <div className="flex-1">
+                                                    <p className="text-sm text-slate-400">Approval</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-xs">3</div>
+                                                <div className="flex-1">
+                                                    <p className="text-sm text-blue-400 font-medium">Card Payment</p>
+                                                    <p className="text-xs text-slate-500">Cash stays in account</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center text-xs">4</div>
+                                            <div className="flex-1">
+                                                <p className="text-sm text-emerald-400 font-medium">
+                                                    Cash Leaves: {settings.dpoExtension} days later
+                                                </p>
+                                                <p className="text-xs text-slate-500">
+                                                    Capital freed: {formatCurrency(results.capitalFreed)}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {/* Supplier Fee Module */}
+                                <div className="glass-panel rounded-2xl p-4">
+                                    <h3 className="text-sm font-semibold text-slate-300 mb-4">Supplier Fee Analysis</h3>
+                                    <div className="flex items-center gap-4 mb-4">
+                                        <div className="flex-1">
+                                            <label className="text-xs text-slate-500 block mb-2">Supplier Fee %</label>
+                                            <input
+                                                type="number"
+                                                value={supplierFee}
+                                                onChange={(e) => setSupplierFee(Number(e.target.value))}
+                                                className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-white"
+                                                step="0.1"
+                                            />
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-xs text-slate-500">Fee Cost</p>
+                                            <p className="text-lg font-semibold text-rose-400">
+                                                {formatCurrency(results.cardSpend * (supplierFee / 100))}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="pt-4 border-t border-slate-700">
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-sm text-slate-400">Net Value (after fees)</span>
+                                            <span className="text-xl font-bold text-emerald-400">
+                                                {formatCurrency(results.totalValue - (results.cardSpend * (supplierFee / 100)))}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {/* Export Actions */}
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={exportPDF}
+                                        className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-4 rounded-2xl transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <span>📄</span> Export PDF
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            const subject = 'Payables Transformation Analysis';
+                                            const body = `Total Value: ${formatCurrency(results.totalValue)}\nSpend Analyzed: ${formatCurrency(results.annualSpend)}`;
+                                            window.location.href = `mailto:?subject=${subject}&body=${body}`;
+                                        }}
+                                        className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-4 rounded-2xl transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <span>✉️</span> Share
+                                    </button>
+                                </div>
+                                
+                                <button
+                                    onClick={() => setCurrentScreen(0)}
+                                    className="w-full text-slate-500 hover:text-slate-300 py-4 text-sm"
+                                >
+                                    Start New Analysis
+                                </button>
+                            </div>
+                        );
+                        
+                    default:
+                        return null;
+                }
+            };
+            
+            return (
+                <div className="min-h-screen bg-slate-900 text-white">
+                    {/* Header */}
+                    <div className="sticky top-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
+                        <div className="max-w-md mx-auto px-4 py-4 flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold">
+                                    P
+                                </div>
+                                <span className="font-semibold text-sm">Payables Analyzer</span>
+                            </div>
+                            {currentScreen < SCREENS.length - 1 && (
+                                <button 
+                                    onClick={() => setShowSettings(true)}
+                                    className="p-2 text-slate-400 hover:text-white transition-colors"
+                                >
+                                    ⚙️
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    
+                    {/* Main Content */}
+                    <div className="max-w-md mx-auto px-4 py-6">
+                        {currentScreen < SCREENS.length - 1 && (
+                            <ProgressDots current={currentScreen} total={SCREENS.length - 1} />
+                        )}
+                        
+                        <div className={animating ? 'opacity-0 translate-x-[-20px] transition-all duration-300' : 'opacity-100 translate-x-0 transition-all duration-300'}>
+                            {renderScreen()}
+                        </div>
+                    </div>
+                    
+                    {/* Navigation Footer */}
+                    {currentScreen < SCREENS.length - 1 && (
+                        <div className="fixed bottom-0 left-0 right-0 bg-slate-900/90 backdrop-blur-md border-t border-slate-800 p-4">
+                            <div className="max-w-md mx-auto flex gap-3">
+                                {currentScreen > 0 && (
+                                    <button
+                                        onClick={prevScreen}
+                                        className="px-6 py-4 rounded-2xl bg-slate-800 text-white font-semibold hover:bg-slate-700 transition-colors"
+                                    >
+                                        ←
+                                    </button>
+                                )}
+                                <button
+                                    onClick={nextScreen}
+                                    disabled={!canProceed()}
+                                    className={`flex-1 py-4 rounded-2xl font-semibold transition-all ${
+                                        canProceed()
+                                            ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/25'
+                                            : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                    }`}
+                                >
+                                    {currentScreen === SCREENS.length - 2 ? 'Calculate Value →' : 'Continue →'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {/* Settings Modal */}
+                    {showSettings && (
+                        <SettingsModal
+                            settings={settings}
+                            onSave={setSettings}
+                            onClose={() => setShowSettings(false)}
+                        />
+                    )}
+                </div>
+            );
+        };
+        
+        // Render
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
