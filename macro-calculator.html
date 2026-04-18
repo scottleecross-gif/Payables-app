@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Macro Calculator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+    .slide-enter { animation: slideIn 0.3s ease-out; }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    input[type=range] { -webkit-appearance: none; background: transparent; width: 100%; }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 20px; width: 20px;
+      border-radius: 50%;
+      background: #3b82f6;
+      cursor: pointer;
+      margin-top: -8px;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.25);
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 4px; border-radius: 2px; background: #334155;
+    }
+    ::-webkit-scrollbar { display: none; }
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useCallback, useMemo } = React;
+
+    /* ─── Constants ─────────────────────────────────────────────────────────── */
+    const ACTIVITY_LEVELS = [
+      { id: 'sedentary',  label: 'Sedentary',         desc: 'Little / no exercise',          factor: 1.20 },
+      { id: 'light',      label: 'Lightly Active',     desc: '1–3 days / week',               factor: 1.375 },
+      { id: 'moderate',   label: 'Moderately Active',  desc: '3–5 days / week',               factor: 1.55 },
+      { id: 'very',       label: 'Very Active',        desc: '6–7 days / week',               factor: 1.725 },
+      { id: 'extreme',    label: 'Extra Active',       desc: 'Physical job + daily exercise', factor: 1.90 },
+    ];
+
+    const GOALS = [
+      { id: 'lose',     label: 'Lose Fat',        icon: '🔥', desc: 'Reduce body fat',           color: 'orange' },
+      { id: 'gain',     label: 'Gain Muscle',     icon: '💪', desc: 'Build lean muscle',          color: 'emerald' },
+      { id: 'recomp',   label: 'Recomposition',   icon: '⚡', desc: 'Lose fat & gain muscle',    color: 'purple' },
+      { id: 'maintain', label: 'Maintain',        icon: '⚖️', desc: 'Stay at current weight',    color: 'blue' },
+    ];
+
+    const RATE_OPTIONS = [
+      { id: 'conservative', label: 'Conservative', loseAdj: -250, gainAdj:  150 },
+      { id: 'moderate',     label: 'Moderate',     loseAdj: -500, gainAdj:  300 },
+      { id: 'aggressive',   label: 'Aggressive',   loseAdj: -750, gainAdj:  500 },
+    ];
+
+    /* ─── Calculation engine ─────────────────────────────────────────────────── */
+    function calcResults(d) {
+      const activity = ACTIVITY_LEVELS.find(a => a.id === d.activityLevel);
+      const rate     = RATE_OPTIONS.find(r => r.id === d.rate) || RATE_OPTIONS[1];
+
+      // Mifflin-St Jeor BMR
+      const bmr = d.sex === 'male'
+        ? (10 * d.weightKg) + (6.25 * d.heightCm) - (5 * d.age) + 5
+        : (10 * d.weightKg) + (6.25 * d.heightCm) - (5 * d.age) - 161;
+
+      const tdee = Math.round(bmr * activity.factor);
+
+      let calorieAdj = 0;
+      if (d.goal === 'lose')  calorieAdj = rate.loseAdj;
+      if (d.goal === 'gain')  calorieAdj = rate.gainAdj;
+      // recomp & maintain stay at TDEE
+
+      const targetCal = Math.max(1200, Math.round(tdee + calorieAdj));
+
+      // Protein — use lighter of current / goal weight so cuts don't over-inflate
+      const refWeightKg = (d.goal === 'lose' && d.goalWeightKg < d.weightKg)
+        ? d.goalWeightKg : d.weightKg;
+      const proteinMultiplier = d.goal === 'recomp' || d.goal === 'gain' ? 2.4
+        : d.goal === 'lose' ? 2.2 : 2.0;
+      const proteinG   = Math.round(refWeightKg * proteinMultiplier);
+      const proteinCal = proteinG * 4;
+
+      // Fat — 25–30 % of total calories
+      const fatPct = d.goal === 'gain' ? 0.25 : 0.28;
+      const fatCal = Math.round(targetCal * fatPct);
+      const fatG   = Math.round(fatCal / 9);
+
+      // Carbs — remainder
+      const carbCal = Math.max(0, targetCal - proteinCal - fatCal);
+      const carbG   = Math.max(0, Math.round(carbCal / 4));
+
+      // Body composition
+      const currentMuscleKg = d.muscleMassPercent
+        ? Math.round(d.weightKg * (d.muscleMassPercent / 100) * 10) / 10 : null;
+      const targetMuscleKg  = d.goalMuscleMassPercent
+        ? Math.round((d.goalWeightKg || d.weightKg) * (d.goalMuscleMassPercent / 100) * 10) / 10 : null;
+
+      // Timeline (7700 kcal ≈ 1 kg body mass)
+      const weeklyChangeKg  = calorieAdj !== 0 ? calorieAdj * 7 / 7700 : 0;
+      const weightDiffKg    = (d.goalWeightKg || d.weightKg) - d.weightKg;
+      const weeksToGoal     = weeklyChangeKg !== 0 && Math.abs(weightDiffKg) > 0.5
+        ? Math.round(Math.abs(weightDiffKg / weeklyChangeKg)) : null;
+
+      return {
+        bmr: Math.round(bmr), tdee, targetCal, calorieAdj,
+        protein: { g: proteinG, cal: proteinCal, pct: Math.round((proteinCal / targetCal) * 100) },
+        carbs:   { g: carbG,    cal: carbCal,    pct: Math.round((carbCal   / targetCal) * 100) },
+        fat:     { g: fatG,     cal: fatCal,     pct: Math.round((fatCal    / targetCal) * 100) },
+        currentMuscleKg, targetMuscleKg, weeklyChangeKg, weeksToGoal,
+      };
+    }
+
+    /* ─── Helpers ────────────────────────────────────────────────────────────── */
+    function toKg(val, unit)  { return unit === 'lbs' ? Math.round((val / 2.2046) * 10) / 10 : val; }
+    function fromKg(kg, unit) { return unit === 'lbs' ? Math.round(kg * 2.2046 * 10) / 10 : kg; }
+    function toCm(ft, inch)   { return Math.round((parseInt(ft || 0) * 12 + parseInt(inch || 0)) * 2.54); }
+
+    /* ─── Shared UI components ───────────────────────────────────────────────── */
+    function ProgressDots({ total, current }) {
+      return (
+        <div className="flex gap-2 items-center">
+          {Array.from({ length: total }).map((_, i) => (
+            <div key={i} className={`h-2 rounded-full transition-all duration-300 ${
+              i === current ? 'w-8 bg-blue-500' : i < current ? 'w-2 bg-blue-500/50' : 'w-2 bg-slate-700'
+            }`} />
+          ))}
+        </div>
+      );
+    }
+
+    function UnitToggle({ value, options, onChange }) {
+      return (
+        <div className="flex bg-slate-800 rounded-lg p-1 gap-1">
+          {options.map(o => (
+            <button key={o.value} onClick={() => onChange(o.value)}
+              className={`flex-1 py-1 px-3 rounded text-sm font-medium transition-all ${
+                value === o.value ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    function NumberInput({ value, onChange, placeholder, suffix, min, max }) {
+      return (
+        <div className="relative">
+          <input
+            type="number"
+            value={value || ''}
+            onChange={e => onChange(e.target.value)}
+            placeholder={placeholder}
+            min={min} max={max}
+            className="w-full bg-slate-800 text-white rounded-xl px-4 py-3 pr-16 text-lg border border-slate-700
+                       focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/25 transition-all"
+          />
+          {suffix && (
+            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm pointer-events-none">
+              {suffix}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    function SliderRow({ label, value, min, max, onChange, suffix, color = 'blue', valueColor }) {
+      return (
+        <div>
+          <div className="flex justify-between text-sm mb-2">
+            <span className="text-slate-400">{label}</span>
+            <span className={`font-semibold ${valueColor || `text-${color}-400`}`}>{value}{suffix}</span>
+          </div>
+          <input type="range" min={min} max={max} value={value}
+            onChange={e => onChange(parseInt(e.target.value))} />
+          <div className="flex justify-between text-slate-600 text-xs mt-1">
+            <span>{min}{suffix}</span><span>{max}{suffix}</span>
+          </div>
+        </div>
+      );
+    }
+
+    function MacroCard({ label, icon, g, cal, pct, textColor, bgColor }) {
+      return (
+        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-slate-400 text-xs font-medium uppercase tracking-wide">{label}</span>
+            <span className="text-lg">{icon}</span>
+          </div>
+          <div className={`text-3xl font-bold ${textColor}`}>{g}<span className="text-base font-normal text-slate-500 ml-1">g</span></div>
+          <div className="text-slate-500 text-xs mt-0.5">{cal} kcal · {pct}%</div>
+          <div className="mt-3 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+            <div className={`h-full ${bgColor} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Screen 1 — Current Stats ──────────────────────────────────────────── */
+    function Screen1({ data, onUpdate, onNext }) {
+      const [heightUnit, setHeightUnit] = useState('cm');
+      const [weightUnit, setWeightUnit] = useState('kg');
+      const [ft, setFt]     = useState('');
+      const [inch, setInch] = useState('');
+
+      const switchHeightUnit = (unit) => {
+        setHeightUnit(unit);
+        if (unit === 'ft' && data.heightCm) {
+          const totalIn = data.heightCm / 2.54;
+          setFt(Math.floor(totalIn / 12).toString());
+          setInch(Math.round(totalIn % 12).toString());
+        } else if (unit === 'cm' && (ft || inch)) {
+          onUpdate({ heightCm: toCm(ft, inch) });
+        }
+      };
+
+      const handleFtIn = (f, i) => {
+        setFt(f); setInch(i);
+        const cm = toCm(f, i);
+        if (cm > 0) onUpdate({ heightCm: cm });
+      };
+
+      const switchWeightUnit = (unit) => {
+        setWeightUnit(unit);
+        onUpdate({ weightUnit: unit });
+      };
+
+      const displayWeight = data.weightKg ? fromKg(data.weightKg, weightUnit) : '';
+
+      const canProceed = data.heightCm > 0 && data.weightKg > 0 && data.age > 0 && data.sex;
+
+      return (
+        <div className="slide-enter space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold mb-1">Your Stats</h2>
+            <p className="text-slate-400 text-sm">Tell us about your body right now</p>
+          </div>
+
+          {/* Sex */}
+          <div>
+            <label className="text-slate-300 text-sm font-medium block mb-2">Biological Sex</label>
+            <div className="grid grid-cols-2 gap-3">
+              {[{ id: 'male', icon: '♂', label: 'Male' }, { id: 'female', icon: '♀', label: 'Female' }].map(s => (
+                <button key={s.id} onClick={() => onUpdate({ sex: s.id })}
+                  className={`py-3 rounded-xl font-medium transition-all ${
+                    data.sex === s.id
+                      ? 'bg-blue-600 text-white ring-2 ring-blue-500/40'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                  }`}>
+                  {s.icon} {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Age */}
+          <div>
+            <label className="text-slate-300 text-sm font-medium block mb-2">Age</label>
+            <NumberInput
+              value={data.age} min={15} max={100} placeholder="e.g. 28" suffix="years"
+              onChange={v => onUpdate({ age: parseInt(v) || 0 })}
+            />
+          </div>
+
+          {/* Height */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-slate-300 text-sm font-medium">Height</label>
+              <UnitToggle
+                value={heightUnit}
+                options={[{ value: 'cm', label: 'cm' }, { value: 'ft', label: 'ft / in' }]}
+                onChange={switchHeightUnit}
+              />
+            </div>
+            {heightUnit === 'cm' ? (
+              <NumberInput
+                value={data.heightCm || ''} min={100} max={250} placeholder="e.g. 175" suffix="cm"
+                onChange={v => onUpdate({ heightCm: parseInt(v) || 0 })}
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <NumberInput value={ft} min={3} max={8} placeholder="5" suffix="ft"
+                  onChange={v => handleFtIn(v, inch)} />
+                <NumberInput value={inch} min={0} max={11} placeholder="10" suffix="in"
+                  onChange={v => handleFtIn(ft, v)} />
+              </div>
+            )}
+          </div>
+
+          {/* Weight */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-slate-300 text-sm font-medium">Current Weight</label>
+              <UnitToggle
+                value={weightUnit}
+                options={[{ value: 'kg', label: 'kg' }, { value: 'lbs', label: 'lbs' }]}
+                onChange={switchWeightUnit}
+              />
+            </div>
+            <NumberInput
+              value={displayWeight} placeholder={weightUnit === 'kg' ? 'e.g. 80' : 'e.g. 176'}
+              suffix={weightUnit}
+              onChange={v => {
+                const n = parseFloat(v);
+                if (!isNaN(n) && n > 0) onUpdate({ weightKg: toKg(n, weightUnit) });
+              }}
+            />
+          </div>
+
+          {/* Current muscle mass */}
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4">
+            <SliderRow
+              label="Current Muscle Mass %"
+              value={data.muscleMassPercent} min={20} max={60}
+              onChange={v => onUpdate({ muscleMassPercent: v })}
+              suffix="%"
+              valueColor="text-blue-400"
+            />
+            <p className="text-slate-600 text-xs mt-3">
+              Avg male ≈ 38–44 % · Avg female ≈ 30–35 %
+            </p>
+          </div>
+
+          <button onClick={onNext} disabled={!canProceed}
+            className={`w-full py-4 rounded-xl font-semibold text-lg transition-all ${
+              canProceed ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+            }`}>
+            Continue →
+          </button>
+        </div>
+      );
+    }
+
+    /* ─── Screen 2 — Goals ──────────────────────────────────────────────────── */
+    function Screen2({ data, onUpdate, onBack, onNext }) {
+      const weightUnit = data.weightUnit || 'kg';
+      const displayGoalWeight = data.goalWeightKg ? fromKg(data.goalWeightKg, weightUnit) : '';
+      const canProceed = data.goalWeightKg > 0 && data.goal && data.activityLevel;
+
+      return (
+        <div className="slide-enter space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold mb-1">Your Goals</h2>
+            <p className="text-slate-400 text-sm">What are you working towards?</p>
+          </div>
+
+          {/* Primary goal */}
+          <div>
+            <label className="text-slate-300 text-sm font-medium block mb-3">Primary Goal</label>
+            <div className="grid grid-cols-2 gap-3">
+              {GOALS.map(g => (
+                <button key={g.id} onClick={() => onUpdate({ goal: g.id })}
+                  className={`p-4 rounded-xl text-left transition-all border-2 ${
+                    data.goal === g.id
+                      ? 'bg-blue-600/15 border-blue-500 text-white'
+                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500'
+                  }`}>
+                  <div className="text-2xl mb-1">{g.icon}</div>
+                  <div className="font-semibold text-sm">{g.label}</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{g.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Goal weight */}
+          <div>
+            <label className="text-slate-300 text-sm font-medium block mb-2">
+              Goal Weight ({weightUnit})
+            </label>
+            <NumberInput
+              value={displayGoalWeight}
+              placeholder={weightUnit === 'kg' ? 'e.g. 75' : 'e.g. 165'}
+              suffix={weightUnit}
+              onChange={v => {
+                const n = parseFloat(v);
+                if (!isNaN(n) && n > 0) onUpdate({ goalWeightKg: toKg(n, weightUnit) });
+              }}
+            />
+          </div>
+
+          {/* Target muscle mass */}
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4">
+            <SliderRow
+              label="Target Muscle Mass %"
+              value={data.goalMuscleMassPercent} min={20} max={65}
+              onChange={v => onUpdate({ goalMuscleMassPercent: v })}
+              suffix="%"
+              valueColor="text-emerald-400"
+            />
+            <p className="text-slate-600 text-xs mt-3">
+              Elite athletes ≈ 50–65 % · Natural limit varies by genetics
+            </p>
+          </div>
+
+          {/* Activity level */}
+          <div>
+            <label className="text-slate-300 text-sm font-medium block mb-3">Activity Level</label>
+            <div className="space-y-2">
+              {ACTIVITY_LEVELS.map(a => (
+                <button key={a.id} onClick={() => onUpdate({ activityLevel: a.id })}
+                  className={`w-full p-3 rounded-xl text-left flex items-center justify-between transition-all border ${
+                    data.activityLevel === a.id
+                      ? 'bg-blue-600/15 border-blue-500 text-white'
+                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500'
+                  }`}>
+                  <div>
+                    <div className="font-medium text-sm">{a.label}</div>
+                    <div className="text-xs text-slate-400">{a.desc}</div>
+                  </div>
+                  <div className={`text-xs font-bold px-2 py-1 rounded-lg shrink-0 ${
+                    data.activityLevel === a.id ? 'bg-blue-500/25 text-blue-300' : 'bg-slate-700 text-slate-400'
+                  }`}>
+                    ×{a.factor}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Rate — only for lose / gain */}
+          {(data.goal === 'lose' || data.goal === 'gain') && (
+            <div>
+              <label className="text-slate-300 text-sm font-medium block mb-2">
+                {data.goal === 'lose' ? 'Loss Rate' : 'Gain Rate'}
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {RATE_OPTIONS.map(r => (
+                  <button key={r.id} onClick={() => onUpdate({ rate: r.id })}
+                    className={`py-2.5 rounded-xl text-sm font-medium capitalize transition-all border ${
+                      data.rate === r.id
+                        ? 'bg-blue-600 text-white border-blue-500'
+                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
+                    }`}>
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <button onClick={onBack}
+              className="py-4 rounded-xl font-semibold text-slate-400 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all">
+              ← Back
+            </button>
+            <button onClick={onNext} disabled={!canProceed}
+              className={`py-4 rounded-xl font-semibold transition-all ${
+                canProceed ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
+              Calculate →
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Screen 3 — Results ────────────────────────────────────────────────── */
+    function Screen3({ data, results, onBack, onReset }) {
+      const goalCfg  = GOALS.find(g => g.id === data.goal);
+      const weightUnit = data.weightUnit || 'kg';
+
+      const heroColor = {
+        lose: 'from-orange-600/25 to-red-600/20 border-orange-500/30',
+        gain: 'from-emerald-600/25 to-green-600/20 border-emerald-500/30',
+        recomp: 'from-purple-600/25 to-violet-600/20 border-purple-500/30',
+        maintain: 'from-blue-600/25 to-indigo-600/20 border-blue-500/30',
+      }[data.goal];
+
+      const calColor = {
+        lose: 'text-orange-400', gain: 'text-emerald-400',
+        recomp: 'text-purple-400', maintain: 'text-blue-400',
+      }[data.goal];
+
+      const adjLabel = results.calorieAdj < 0 ? 'deficit' : results.calorieAdj > 0 ? 'surplus' : null;
+
+      return (
+        <div className="slide-enter space-y-5">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-2xl">{goalCfg.icon}</span>
+              <h2 className="text-2xl font-bold">Your Daily Plan</h2>
+            </div>
+            <p className="text-slate-400 text-sm">Tailored for your {goalCfg.label.toLowerCase()} goal</p>
+          </div>
+
+          {/* Calorie hero card */}
+          <div className={`bg-gradient-to-br ${heroColor} border rounded-2xl p-5`}>
+            <div className="text-slate-400 text-sm mb-1">Daily Calorie Target</div>
+            <div className={`text-5xl font-bold ${calColor} tabular-nums`}>
+              {results.targetCal.toLocaleString()}
+              <span className="text-xl font-normal text-slate-400 ml-2">kcal</span>
+            </div>
+            <div className="flex flex-wrap gap-x-5 gap-y-1 mt-3 text-sm">
+              <span className="text-slate-500">BMR <span className="text-slate-300 font-medium">{results.bmr.toLocaleString()} kcal</span></span>
+              <span className="text-slate-500">TDEE <span className="text-slate-300 font-medium">{results.tdee.toLocaleString()} kcal</span></span>
+            </div>
+            {adjLabel && (
+              <div className={`mt-2 text-sm font-semibold ${results.calorieAdj < 0 ? 'text-orange-400' : 'text-emerald-400'}`}>
+                {results.calorieAdj > 0 ? '+' : ''}{results.calorieAdj} kcal {adjLabel}
+              </div>
+            )}
+          </div>
+
+          {/* Macros */}
+          <div>
+            <p className="text-slate-500 text-xs uppercase tracking-wider font-medium mb-3">Macro Breakdown</p>
+            <div className="grid grid-cols-3 gap-3">
+              <MacroCard label="Protein" icon="🥩" g={results.protein.g} cal={results.protein.cal}
+                pct={results.protein.pct} textColor="text-blue-400" bgColor="bg-blue-500" />
+              <MacroCard label="Carbs"   icon="🌾" g={results.carbs.g}   cal={results.carbs.cal}
+                pct={results.carbs.pct}   textColor="text-amber-400" bgColor="bg-amber-500" />
+              <MacroCard label="Fat"     icon="🥑" g={results.fat.g}     cal={results.fat.cal}
+                pct={results.fat.pct}     textColor="text-purple-400" bgColor="bg-purple-500" />
+            </div>
+          </div>
+
+          {/* Per-meal guide */}
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4">
+            <p className="text-slate-400 text-sm font-medium mb-3">Per Meal Guide <span className="text-slate-600">(3 meals/day)</span></p>
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: 'Calories',  val: Math.round(results.targetCal / 3).toLocaleString(), unit: 'kcal',  color: 'text-white' },
+                { label: 'Protein',   val: Math.round(results.protein.g / 3),                  unit: 'g',     color: 'text-blue-400' },
+                { label: 'Carbs',     val: Math.round(results.carbs.g / 3),                    unit: 'g',     color: 'text-amber-400' },
+                { label: 'Fat',       val: Math.round(results.fat.g / 3),                      unit: 'g',     color: 'text-purple-400' },
+              ].map(m => (
+                <div key={m.label} className="bg-slate-700/50 rounded-xl py-3 text-center">
+                  <div className={`text-xl font-bold ${m.color}`}>{m.val}<span className="text-sm font-normal text-slate-500 ml-1">{m.unit}</span></div>
+                  <div className="text-xs text-slate-500 mt-0.5">{m.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Body composition */}
+          {(results.currentMuscleKg || results.targetMuscleKg) && (
+            <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4 space-y-4">
+              <p className="text-slate-400 text-sm font-medium">Body Composition</p>
+              {results.currentMuscleKg && (
+                <div>
+                  <div className="flex justify-between text-sm mb-1.5">
+                    <span className="text-slate-400">Current Muscle</span>
+                    <span className="text-white font-medium">
+                      {results.currentMuscleKg} kg &nbsp;·&nbsp; {data.muscleMassPercent}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-500 rounded-full" style={{ width: `${data.muscleMassPercent * (100 / 65)}%` }} />
+                  </div>
+                </div>
+              )}
+              {results.targetMuscleKg && (
+                <div>
+                  <div className="flex justify-between text-sm mb-1.5">
+                    <span className="text-slate-400">Target Muscle</span>
+                    <span className="text-emerald-400 font-medium">
+                      {results.targetMuscleKg} kg &nbsp;·&nbsp; {data.goalMuscleMassPercent}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${data.goalMuscleMassPercent * (100 / 65)}%` }} />
+                  </div>
+                </div>
+              )}
+              {results.currentMuscleKg && results.targetMuscleKg && (
+                <p className="text-slate-600 text-xs">
+                  Muscle gain target: +{Math.max(0, Math.round((results.targetMuscleKg - results.currentMuscleKg) * 10) / 10)} kg lean mass
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Timeline */}
+          {results.weeksToGoal && results.weeksToGoal > 0 && results.weeksToGoal < 260 && (
+            <div className="bg-slate-800/60 border border-slate-700 rounded-2xl p-4 flex items-center justify-between">
+              <div>
+                <div className="text-slate-400 text-sm">Estimated Timeline to Goal</div>
+                <div className="text-white font-bold text-lg mt-0.5">
+                  {results.weeksToGoal < 8
+                    ? `${results.weeksToGoal} week${results.weeksToGoal > 1 ? 's' : ''}`
+                    : `${Math.round(results.weeksToGoal / 4.33)} month${Math.round(results.weeksToGoal / 4.33) > 1 ? 's' : ''}`}
+                </div>
+                <div className="text-slate-600 text-xs mt-0.5">
+                  ~{Math.abs(Math.round(results.weeklyChangeKg * 10) / 10)} kg / week
+                </div>
+              </div>
+              <div className="text-3xl">📅</div>
+            </div>
+          )}
+
+          {/* Key stats summary */}
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4">
+            <p className="text-slate-400 text-sm font-medium mb-3">Your Input Summary</p>
+            <div className="grid grid-cols-2 gap-y-2 text-sm">
+              {[
+                ['Height',         `${data.heightCm} cm`],
+                ['Current Weight', `${fromKg(data.weightKg, weightUnit)} ${weightUnit}`],
+                ['Goal Weight',    `${fromKg(data.goalWeightKg, weightUnit)} ${weightUnit}`],
+                ['Goal',           GOALS.find(g => g.id === data.goal)?.label],
+                ['Activity',       ACTIVITY_LEVELS.find(a => a.id === data.activityLevel)?.label],
+                ['Age / Sex',      `${data.age} · ${data.sex}`],
+              ].map(([k, v]) => (
+                <div key={k}>
+                  <div className="text-slate-600 text-xs">{k}</div>
+                  <div className="text-slate-300 font-medium capitalize">{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 pb-4">
+            <button onClick={onBack}
+              className="py-4 rounded-xl font-semibold text-slate-400 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all">
+              ← Edit Goals
+            </button>
+            <button onClick={onReset}
+              className="py-4 rounded-xl font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-all">
+              Start Over
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── App ────────────────────────────────────────────────────────────────── */
+    const INIT = {
+      sex: null, age: 0, heightCm: 0, weightKg: 0,
+      muscleMassPercent: 40, weightUnit: 'kg',
+      goal: null, goalWeightKg: 0, goalMuscleMassPercent: 45,
+      activityLevel: null, rate: 'moderate',
+    };
+
+    function App() {
+      const [screen, setScreen]     = useState(0);
+      const [formData, setFormData] = useState(INIT);
+
+      const update = useCallback(patch => setFormData(prev => ({ ...prev, ...patch })), []);
+      const reset  = () => { setFormData(INIT); setScreen(0); };
+
+      const results = useMemo(
+        () => screen === 2 ? calcResults(formData) : null,
+        [screen, formData]
+      );
+
+      return (
+        <div className="min-h-screen bg-slate-900 flex flex-col">
+          {/* Header */}
+          <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur-sm border-b border-slate-800 px-4 py-3">
+            <div className="max-w-md mx-auto flex items-center justify-between">
+              <div>
+                <h1 className="text-lg font-bold text-white leading-tight">Macro Calculator</h1>
+                <p className="text-slate-500 text-xs">Personalised nutrition targets</p>
+              </div>
+              <ProgressDots total={3} current={screen} />
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto">
+            <div className="max-w-md mx-auto px-4 py-6">
+              {screen === 0 && <Screen1 data={formData} onUpdate={update} onNext={() => setScreen(1)} />}
+              {screen === 1 && <Screen2 data={formData} onUpdate={update} onBack={() => setScreen(0)} onNext={() => setScreen(2)} />}
+              {screen === 2 && results && (
+                <Screen3 data={formData} results={results} onBack={() => setScreen(1)} onReset={reset} />
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
